@@ -1,0 +1,590 @@
+﻿+<html>
+	<head>
+		<title>CM20219 – Coursework 2 – WebGL</title>
+        <meta charset="utf-8">
+		<meta name="viewport" content="width=device-width, user-scalable=no, minimum-scale=1.0, maximum-scale=1.0">
+		<style>
+			body { margin: 0; overflow: hidden; }
+			canvas { width: 100%; height: 100%; }
+		</style>
+	</head>
+	<body>
+		<script src="three.js"></script>
+        <script src="OBJLoader.js"></script>
+		<script>
+            "use strict"; // https://stackoverflow.com/q/1335851/72470
+
+            // Global variables that are available in all functions.
+            // Note: You can add your own here, e.g. to store the rendering mode.
+            var camera, scene, renderer;
+
+            var mesh, meshEdges, meshVertices, diceContainer; // variables for the different rendering modes of the dice (box), diceContainer is a 3D object that holds all three
+
+            var bunnyMesh, bunnyMeshEdges, bunnyMeshVertices; // variables for the different rendering modes of the bunny, bunnyPivot is a 3D object that holds all three
+            var meshObjects; // meshObjects holds the diceContainer and bunnyPivot so they can be moved simultaneously
+            var bunnyPosX = -0.5, bunnyPosY = 0, bunnyPosZ = 0, bunnyPivot; // contains the translation values for the bunny to fit into the box
+            var renderedObject = "box"; // holds the variable whose rendering mode is being changed
+            var lookAtPoint = new THREE.Vector3(0, 0, 0); // the point at which the camera looks
+
+            var light, lightTheta = 0, lightMotionRadius = 500; // light - the light object, lightTheta - the angle to the x direction in its circular path, lightMotionRadius - the radius of its path
+            var floor; // the floor object
+            var gravAcc = 9.81, fallVelocity = 0 // mechanics quantities (acceleration due to gravity, velocity in a downward direction)
+            var diceMode = "stationary"; // the mode of the dice
+
+            var guessedSide = 0, sideFaceUp; // the side the player guesses is face up and the side that is face up when the die lands
+            var animationSlowFactor = 500, frameDelay = 0; // slows down animation by factor
+
+            const radialPeriod = 2 * Math.PI; // constant value holding the value of a complete cycle in radians
+
+
+            // Initialise the scene, and draw it for the first time.
+            init();
+			animate();
+
+            // Listen for keyboard events, to react to them.
+            // Note: there are also other event listeners, e.g. for mouse events.
+            document.addEventListener('keydown', handleKeyDown);
+
+            // Scene initialisation. This function is only run once, at the very beginning.
+            function init()
+            {
+                scene = new THREE.Scene(); // instantiates a new scene
+
+                meshObjects = new THREE.Object3D(); // instantiates 3D object container
+
+                // Set up the camera, move it to (3, 4, 5) and look at the origin (0, 0, 0).
+                camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 1000);
+                camera.position.set(3, 4, 5);
+
+                camera.lookAt(lookAtPoint);
+                // draws a helper grid in the x-z plane (note: y is up).
+                scene.add(new THREE.GridHelper(10, 10, 0xFFFFFF));
+
+                // draws a cube (requirement 1).
+                addBox();
+
+                // visualises the axes of the global coordinate system (requirment 2).
+                addAxes();
+
+                // Basic ambient lighting.
+                scene.add(new THREE.AmbientLight(0xFFFFFF));
+                // adds more complex lighting for 'face' rendering mode (requirement 4).
+                light = new THREE.DirectionalLight(0xFFAA88);
+                light.position.set(lightMotionRadius, 100, 0);
+                scene.add(light);	
+
+                addSpotlight();	
+
+                // loads bunny from .obj file
+                loadBunny();
+
+                // adds 3D object to the scene
+                scene.add(meshObjects);
+
+                // adds a floor mesh to the scene
+                addFloor();
+                
+                // Set up the Web GL renderer.
+                renderer = new THREE.WebGLRenderer({ antialias: true });
+				renderer.setPixelRatio(window.devicePixelRatio); // HiDPI/retina rendering
+                renderer.setSize(window.innerWidth, window.innerHeight);
+                renderer.shadowMap.type = THREE.PCFSoftShadowMap; // default THREE.PCFShadowMap
+
+                renderer.shadowMap.enabled = true;
+                document.body.appendChild(renderer.domElement);
+
+                // Handle resizing of the browser window.
+                window.addEventListener('resize', handleResize, false);
+            }
+
+            // Handle resizing of the browser window.
+            function handleResize()
+            {
+				camera.aspect = window.innerWidth / window.innerHeight;
+				camera.updateProjectionMatrix();
+				renderer.setSize(window.innerWidth, window.innerHeight);
+			}
+
+            // Animation loop function. This function is called whenever an update is required.
+			function animate()
+            {
+				requestAnimationFrame(animate);
+                
+                // handles the motion of the light, passing an incremented theta to move the light around its path
+                lightMotion((lightTheta++));
+
+                // handles the motion of the die when it is thrown
+                diceMotion();
+                airRotation();
+
+                // Render the current scene to the screen.
+                renderer.render(scene, camera);
+			}
+
+            // Handle keyboard presses.
+            function handleKeyDown(event) {
+                switch (event.keyCode) {
+                    // Render modes.
+                    case 70: // f = face
+                        addRendering("face");
+                        break;
+
+                    case 69: // e = edge
+                        addRendering("edge");
+                        break;
+
+                    case 86: // v = vertex
+                        addRendering("vertex");
+                        break;
+
+                    case 66: // b = face/edge/vertex rendering is done on either the box or bunny, b toogles between the two
+                        if (renderedObject == "box") {
+                            renderedObject = "bunny";
+                        } else if (renderedObject == "bunny") {
+                            renderedObject = "box";
+                        }
+                        break;
+                    case 88: // x = rotate meshes about x axis (requirement 3)
+                        if (diceMode == "stationary") {
+                            meshObjects.rotation.x += toRad(1);
+                        }
+                        break;
+                    case 89: // y = rotate meshes about y axis (requirement 3)
+                        if (diceMode == "stationary") {
+                            meshObjects.rotation.y += toRad(1);
+                        }
+                        break;
+                    case 90: // z = rotate meshes about z axis (requirement 3)
+                        if (diceMode == "stationary") {
+                            meshObjects.rotation.z += toRad(1);
+                        }
+                        break;
+
+                    case 87: // w = camera move up
+                        moveCamera(camera.getWorldDirection(), 1, "y");
+                        break;
+                    case 65: // a = camera move left
+                        moveCamera(camera.getWorldDirection(), -1, "x");
+                        break;
+                    case 83: // s = camera move down
+                        moveCamera(camera.getWorldDirection(), -1, "y");
+                        break;
+                    case 68: // d = camera move right
+                        moveCamera(camera.getWorldDirection(), 1, "x");
+                        break;
+                    case 37: // left = camera rotate left
+                        rotateCamera(camera.getWorldDirection(), -1, "x");
+                        break;
+                    case 38: // up = camera rotate up
+                        rotateCamera(camera.getWorldDirection(), 1, "y");
+                        break;
+                    case 39: // right = camera rotate right
+                        rotateCamera(camera.getWorldDirection(), 1, "x");
+                        break;
+                    case 40: // down = camera rotate down
+                        rotateCamera(camera.getWorldDirection(), -+1, "y");
+                        break;
+                    case 32: // space = cast die
+                        if (diceMode == "stationary") { // if the die is still
+                            if (guessedSide != 0) { // does the following if the player has guessed a side
+                                fallVelocity = slowDown(-(400 + (Math.random() * 200))); // launches die upwards at a random speed
+                                diceMode = "thrown"; // sets the die to thrown
+                            } else {
+                                alert('You have not guessed the side face up yet!'); // tells the player to guess a side if they have not done so
+                            }
+                        }
+                        break;
+                    case 48: // 0 = reset die
+                        if (diceMode == "landed") { // if the die has landed
+                            diceMode = "stationary"; // sets the die to stationary
+                            resetDie(); // resets the die
+                        }
+                        break;
+                    default: // 1 - 6 = guessed side face up
+                        if (diceMode != "landed") { // if the die has not landed
+                            if (event.keyCode >= 49 && event.keyCode <= 54) { // represents numbers 1 to 6
+                                guessedSide = event.keyCode - 48; // reduces the keycode by 48 to get the actual number represented on the key
+                                alert('Your guess: ' + guessedSide); // informes the player of their guess
+                            }
+                        }
+                }
+            }
+
+            // adds a spotlight to shine on the cube
+            function addSpotlight() {
+                var spotLight = new THREE.SpotLight(0xFFAA88);
+                spotLight.position.set(5, 5, 5);
+                spotLight.target.position.set(lookAtPoint.x, lookAtPoint.y, lookAtPoint.z); // shines on the look at point (on the origin)
+                spotLight.castShadow = true; // allows the light to cast a shadow
+                scene.add(spotLight);
+            }
+
+            // adding box (requirement 1)
+            function addBox() {
+                var materials = addTextures(); // adds an array of textures
+
+                var geometry = new THREE.BoxGeometry(2, 2, 2); // instantiates a cube geometry whose dimensions are 2 by 2 by 2 (1 in both positive and negative direction)
+                geometry.computeFaceNormals();
+                geometry.computeVertexNormals();
+                mesh = new THREE.Mesh(geometry, materials); // renders the box using the geometry and texture array
+
+                mesh.castShadow = true; // allows the cube to cast shadows
+                mesh.receiveShadow = true; // allows the cube to have shadows cast on it by other objects
+
+                scene.add(mesh); // adds box to scene
+
+                meshEdges = addMeshEdges(mesh, 1, 1, 1, 0, 0, 0, 0.1); // calls a function to make the meshes edges
+                scene.add(meshEdges);
+
+                meshVertices = addMeshVertices(mesh, 1, 1, 1, 0, 0, 0, 0.1); // calls a function to make the meshes vertices
+                scene.add(meshVertices);
+
+                // makes a 3D container object to hold the three render modes of the cube at once
+                diceContainer = new THREE.Object3D();
+                diceContainer.add(mesh);
+                diceContainer.add(meshEdges);
+                diceContainer.add(meshVertices);
+                scene.add(diceContainer);
+
+                meshObjects.add(diceContainer); // adds the diceContainer to the meshObject container
+            }
+
+            // returns an array of distinct textures (requirement 7)
+            function addTextures() {
+                /*
+                color is applied on top of the texture
+                shininess affects how much light can hit the texture
+                specular defines the colour that is reflected from the texture when light is shone on it
+                reflectively affects how much the texture reflects light
+                map imports a specified image and renders it on the texture
+                */
+                var texture1 = new THREE.MeshPhongMaterial({ color: 0x9999F0, shininess: 150, specular: 0xFF0000, reflectivity: 1, map: THREE.ImageUtils.loadTexture('dice1.jpg') });
+                var texture2 = new THREE.MeshPhongMaterial({ color: 0x9999F0, shininess: 150, specular: 0xFF7000, reflectivity: 1, map: THREE.ImageUtils.loadTexture('dice2.jpg') });
+                var texture3 = new THREE.MeshPhongMaterial({ color: 0x9999F0, shininess: 150, specular: 0xFFFF00, reflectivity: 1, map: THREE.ImageUtils.loadTexture('dice3.jpg') });
+                var texture4 = new THREE.MeshPhongMaterial({ color: 0x9999F0, shininess: 150, specular: 0x00FF00, reflectivity: 1, map: THREE.ImageUtils.loadTexture('dice4.jpg') });
+                var texture5 = new THREE.MeshPhongMaterial({ color: 0x9999F0, shininess: 150, specular: 0x0000FF, reflectivity: 1, map: THREE.ImageUtils.loadTexture('dice5.jpg') });
+                var texture6 = new THREE.MeshPhongMaterial({ color: 0x9999F0, shininess: 150, specular: 0xFF00FF, reflectivity: 1, map: THREE.ImageUtils.loadTexture('dice6.jpg') });
+                return [texture1, texture6, texture2, texture5, texture3, texture4];
+            }
+
+            // returns the edges of the mesh passed in
+            function addMeshEdges(meshObject, scaleX, scaleY, scaleZ, posX, posY, posZ, vertexSize) {
+                var edges;
+                var edgeColour = new THREE.MeshBasicMaterial({ size: vertexSize, color: 0x00FFFF }); // makes a blue edge material of a specified line size
+                edges = new THREE.Mesh(meshObject.geometry, edgeColour); // makes a new mesh with the geometry of the mesh that was passed into the function and of the colour blue
+                edges.scale.set(scaleX, scaleY, scaleZ); // sets the scales of the edges to those specified
+                edges.position.set(posX, posY, posZ); // sets the positions of the edges to those specified
+                edges.material.wireframe = true; // only shows the actual edges of the mesh
+                edges.visible = false;
+                return edges;
+            }
+
+            // returns the vertices of the mesh passed in
+            function addMeshVertices(meshObject, scaleX, scaleY, scaleZ, posX, posY, posZ, vertexSize) {
+                var vertices;
+                var vertexColour = new THREE.PointsMaterial({ size: vertexSize, color: 0x00FFFF }); // makes a blue points material of a specified point size
+                vertices = new THREE.Points(meshObject.geometry, vertexColour); // makes a new set of points with the geometry of the mesh that was passed into the function and of the colour blue
+                vertices.scale.set(scaleX, scaleY, scaleZ); // sets the scales of the points set to those specified
+                vertices.position.set(posX, posY, posZ); // sets the positions of the points set to those specified
+                vertices.visible = false;
+                return vertices;
+            }
+
+            // adding axes (requirement 2)
+            function addAxes() {
+                var axes = THREE.AxisHelper(50);
+                scene.add(axes);
+            }
+
+            // adding rotation (requirement 3)
+            function airRotation() {
+                if (diceMode == "thrown") {
+                    meshObjects.rotation.x += toRad(Math.random() * 4);
+                    meshObjects.rotation.y += toRad(Math.random() * 4);
+                    meshObjects.rotation.z += toRad(Math.random() * 4);
+                }
+            }
+
+            // adding render modes (requirements 4 and 9)
+            function addRendering(newRenderMode) {
+                if (renderedObject == "box") {
+                    // makes visible the correct cube rendering object, and hides the other two (if the box is toggled on)
+                    if (newRenderMode != "face") {
+                        mesh.visible = false;   
+                    } else {
+                        mesh.visible = true;
+                    }
+                    if (newRenderMode != "edge") {
+                        meshEdges.visible = false;
+                    } else {
+                        meshEdges.visible = true;
+                    }
+                    if (newRenderMode != "vertex") {
+                        meshVertices.visible = false;
+                    } else {
+                        meshVertices.visible = true;
+                    }
+                } else if (renderedObject == "bunny") {
+                    // makes visible the correct bunny rendering object, and hides the other two (if the bunny is toggled on)
+                    if (newRenderMode != "face") {
+                        bunnyMesh.visible = false;
+                    } else {
+                        bunnyMesh.visible = true;
+                    }
+                    if (newRenderMode != "edge") {
+                        bunnyMeshEdges.visible = false;
+                    } else {
+                        bunnyMeshEdges.visible = true;
+                    }
+                    if (newRenderMode != "vertex") {
+                        bunnyMeshVertices.visible = false;
+                    } else {
+                        bunnyMeshVertices.visible = true;
+                    }
+                }
+            }
+
+            // translates the camera (requirement 5)
+            function moveCamera(camDirection, coeff, relativeAxis) {
+                var camSpeed = 0.5;
+                var upVector = new THREE.Vector3(0, 1, 0); // represents the y direction (vertical)
+                var camVelocity = camSpeed * coeff; // is either 1 or -1 depending on the direction
+                var shiftDirection;
+                if (relativeAxis == "y") {
+                    shiftDirection = camDirection; // returns the direction the camera is facing
+                } else if (relativeAxis == "x") {
+                    shiftDirection = camDirection.cross(upVector); // returns the vector perpendicular to up and the direction of the camera, which is the relative x direction
+                }
+                camera.position.add(shiftDirection.multiplyScalar(camVelocity)); // translates the camera by the shiftDirection
+            }
+
+            // rotates the camera (requirement 6)
+            function rotateCamera(camDirection, coeff, relativeAxis) {
+                var oldDistance = getDist(lookAtPoint, camera.position); // stores the old distance between the orbital point and the camera
+                camera.lookAt(lookAtPoint.x, lookAtPoint.y, lookAtPoint.z); // looks at the point (in case the camera was previously translated)
+                if (relativeAxis == "y") {
+                    camera.translateY(coeff); // translates the camera in the relative y direction
+                } else if (relativeAxis == "x") {
+                    camera.translateX(coeff); // translates the camera in the relative x direction
+                } 
+                var newDistance = getDist(lookAtPoint, camera.position); // gets the new distance between the orbital point and the camera
+                var vectorToCam = getVector(lookAtPoint, camera.position); // gets the vector from the orbital point to the camera
+                camera.lookAt(lookAtPoint.x, lookAtPoint.y, lookAtPoint.z); // makes the camera look at the point again
+
+                vectorToCam.multiplyScalar((oldDistance / newDistance)); // multiplies the vector so it has the same magnitude as the old distance but in the new direction
+                camera.position.set(lookAtPoint.x + vectorToCam.x, lookAtPoint.y + vectorToCam.y, lookAtPoint.z + vectorToCam.z) // sets the camera;s position to new point from the orbital point
+            }
+
+            // returns the distance between two specified points
+            function getDist(p1, p2) {
+                var dx = (p2.x - p1.x);
+                var dy = (p2.y - p1.y);
+                var dz = (p2.z - p1.z);
+
+                return Math.sqrt((dx * dx) + (dy * dy) + (dz * dz));
+            }
+
+            // returns the vector from one point to another
+            function getVector(p1, p2) {
+                var dx = (p2.x - p1.x);
+                var dy = (p2.y - p1.y);
+                var dz = (p2.z - p1.z);
+
+                return new THREE.Vector3(dx, dy, dz);
+            }
+
+            // loads the bunny mesh from the (requirement 8)
+            function loadBunny() {
+                var bunnyLoader = new THREE.OBJLoader();
+
+                // loads the object from the file
+                bunnyLoader.load('bunny-5000.obj', function (object) {
+                    addBunny(object); // calls the add bunny function, passing the object loaded from the file
+                },
+                    // shows the progress of the .obj loading from the file
+                    function (loadProgress) {
+                        console.log((loadProgress.loaded / loadProgress.total * 100) + '% loaded');
+                    },
+                    // prints an error message if an error occurs
+                    function (error) {
+                        console.log('An error happened');
+                    }
+                );
+            }
+
+            // adds the bunny mesh to the scene (requirement 8)
+            function addBunny(bunnyObj) {
+
+                bunnyMesh = bunnyObj.children[0]; // the first child is the actual mesh
+                var bunnyBox = new THREE.Box3().setFromObject(bunnyMesh); // encloses the bunny mesh in a box with the same dimensions
+                var bunnyScale = 2 / Math.max(bunnyBox.size().x, bunnyBox.size().y, bunnyBox.size().z); // rescales the bunny based on the box's dimensions
+                var bunnyScaleX = bunnyScale, bunnyScaleY = bunnyScale, bunnyScaleZ = bunnyScale;
+
+                bunnyMesh.material = new THREE.MeshPhongMaterial({ color: 0x2200FF, shininess: 150, specular: 0x00FFFF, reflectivity: 1 });
+                bunnyMesh.castShadow = true;
+                bunnyMesh.receiveShadow = true;
+                bunnyMesh.scale.set(bunnyScaleX, bunnyScaleY, bunnyScaleZ);
+                bunnyMesh.position.set(bunnyPosX, bunnyPosY, bunnyPosZ);
+                scene.add(bunnyMesh);
+
+                bunnyMeshEdges = addMeshEdges(bunnyMesh, bunnyScaleX, bunnyScaleY, bunnyScaleZ, bunnyPosX, bunnyPosY, bunnyPosZ, 0.01); // calls the edges function, passing the bunny mesh
+                scene.add(bunnyMeshEdges);
+
+                bunnyMeshVertices = addMeshVertices(bunnyMesh, bunnyScaleX, bunnyScaleY, bunnyScaleZ, bunnyPosX, bunnyPosY, bunnyPosZ, 0.01); // calls the vertices function, passing the bunny mesh
+                scene.add(bunnyMeshVertices);
+
+                // creates a container for the bunny's rendering objects
+                bunnyPivot = new THREE.Object3D();
+                bunnyPivot.add(bunnyMesh);
+                bunnyPivot.add(bunnyMeshEdges);
+                bunnyPivot.add(bunnyMeshVertices);
+                scene.add(bunnyPivot);
+
+                meshObjects.add(bunnyPivot); // adds the bunnyPivot to the meshObject container
+            }
+
+            // handles the motion of the light
+            function lightMotion(angle) {
+                angle = toRad(angle);
+                // sets the new position of the light based on the angle passed into the function
+                light.position.x = Math.cos(angle) * lightMotionRadius;
+                light.position.z = Math.sin(angle) * lightMotionRadius;
+                light.shadow.camera.lookAt(lookAtPoint.x, lookAtPoint.y, lookAtPoint.z);
+            }
+
+            // returns the radian value passed in degrees
+            function toDeg(radians) {
+                return (radians * 180 / Math.PI);
+            }
+
+            // returns the degree value passed in radians
+            function toRad(degrees) {
+                return (degrees * Math.PI / 180);
+            }
+
+            // adds a floor mesh to the scene
+            function addFloor() {
+                var floorGeometry = new THREE.CubeGeometry(10, 1, 10);
+                var floorMaterial = new THREE.MeshPhongMaterial({ ambient: 0x444444, color: 0x3333FF, shininess: 150, specular: 0xFFFFFF });
+                floor = new THREE.Mesh(floorGeometry, floorMaterial);
+                floor.scale.multiplyScalar(3);
+                floor.position.set(0, -3.5, 0);
+                scene.add(floor);
+                floor.receiveShadow = true;
+                gravAcc = slowDown(gravAcc); // slows down the acceleration due to gravity based on the animation frame rate
+            }
+
+            // handles the motion of the die
+            function diceMotion() {
+                if (diceMode == "thrown") { // if the die has been thrown
+                    var fallVector = new THREE.Vector3(0, fallVelocity += gravAcc, 0); // creates a new fall vector that is altered by the acceleration due to gravity, simultaneously changing the fallVelocity
+                    meshObjects.position.add(fallVector.multiplyScalar(-1)); // chjanges the die's position by the fall vector
+                    if (meshObjects.position.y <= -1) {
+                        if (fallVelocity > slowDown(50)) { // if the die falls at a fast enough rate...
+                            fallVelocity *= -(0.5 + (Math.random() * 0.25)); // causes the die to bounce back up at between 50% and 75% of the original speed
+                        } else {
+                            diceMode = "landed";
+                            fallVelocity = 0;
+                            landOnFace(); // otherwise, causes the die to land on a face
+                        }
+                        meshObjects.position.y = -1;
+                    }
+                } else if (diceMode == "landed") {
+                    if (frameDelay < 10) {
+                        frameDelay++; // delays the animation for 10 frames before doing something
+                    } else if (frameDelay == 10) {
+                        rightOrWrong();
+                        frameDelay++;
+                    }
+                }
+            }
+
+            // returns a value divided by a set factor
+            function slowDown(vectorQuantity) {
+                return (vectorQuantity / animationSlowFactor);
+            }
+
+            // resets the die
+            function resetDie() {
+                meshObjects.position.set(0, 0, 0); // returns the die to the origin
+                fallVelocity = 0;
+                floor.material.color.set(0x3333FF); // resets the floor to its original colour
+                frameDelay = 0;
+                guessedSide = 0; // resets the guess so the player has to guess again
+            }
+
+            // handles the landing of the die on one of its faces
+            function landOnFace() {
+                // finds the closest multiple of 90 degrees (in radians) for each rotatory value of the die
+                var closestXRotation90 = roundTo(toDeg(meshObjects.rotation.x), 90);
+                var closestYRotation90 = roundTo(toDeg(meshObjects.rotation.y), 90);
+                var closestZRotation90 = roundTo(toDeg(meshObjects.rotation.z), 90);
+
+                // rotates the die to match those multiples
+                meshObjects.rotation.x = toRad(closestXRotation90);
+                meshObjects.rotation.y = toRad(closestYRotation90);
+                meshObjects.rotation.z = toRad(closestZRotation90);
+
+                // based on the new rotations of the die, decides the face of the die that is up
+                decideUpFace(closestXRotation90, closestYRotation90, closestZRotation90);
+            }
+
+            // rounds a value to the nearest multiple of a specified factor
+            function roundTo(value, roundingFactor) {
+                var nearestMultiple = roundingFactor * Math.round(value / roundingFactor);
+                return nearestMultiple;
+            }
+
+            // decides which face of the die is facing up when the die lands
+            function decideUpFace(rX, rY, rZ) {
+                /*
+                for each orientation of the cube, specifies which side is face up
+                xSidesArrayAB where
+                - A represents the number of times the cube has been rotated about the y axis by 90 degrees
+                - B represents the number of times the cube has been rotated about the z axis by 90 degrees
+                - the index of each number in each array is the number of times the cube has been rotated about the x axis by 90 degrees
+                */
+                var xSidesArray00 = [2, 4, 5, 3];
+                var xSidesArray10 = [2, 1, 5, 6];
+                var xSidesArray20 = [2, 3, 5, 4];
+                var xSidesArray30 = [2, 6, 5, 1];
+
+                var xSidesArray01 = [1, 4, 6, 3];
+                var xSidesArray11 = [1, 5, 6, 2];
+                var xSidesArray21 = [1, 3, 6, 4];
+                var xSidesArray31 = [1, 2, 6, 5];
+
+                var xSidesArray02 = [5, 4, 2, 3];
+                var xSidesArray12 = [5, 6, 2, 1];
+                var xSidesArray22 = [5, 3, 2, 4];
+                var xSidesArray32 = [5, 1, 2, 6];
+
+                var xSidesArray03 = [6, 4, 1, 3];
+                var xSidesArray13 = [6, 2, 1, 5];
+                var xSidesArray23 = [6, 3, 1, 4];
+                var xSidesArray33 = [6, 5, 1, 2];
+                // a 3D array storing every orientation
+                var xSidesArray = [[xSidesArray00, xSidesArray01, xSidesArray02, xSidesArray03],
+                                   [xSidesArray10, xSidesArray11, xSidesArray12, xSidesArray13],
+                                   [xSidesArray20, xSidesArray21, xSidesArray22, xSidesArray23],
+                                   [xSidesArray30, xSidesArray31, xSidesArray32, xSidesArray33]];
+
+                // divides the values passed in by 90 and mods it by 4 (there are 4 90s in 360, a full cycle)
+                var xRightAngleRotations = (rX / 90) % 4;
+                var yRightAngleRotations = (rY / 90) % 4;
+                var zRightAngleRotations = (rZ / 90) % 4;
+
+               sideFaceUp = xSidesArray[yRightAngleRotations][zRightAngleRotations][xRightAngleRotations]; // sets the face up number to the corresponding value in the array
+            }
+
+            // displays via use of the floor whether or not the player guessed correctly
+            function rightOrWrong() {
+                if (guessedSide == sideFaceUp) {
+                    floor.material.color.set(0x00FF66); // changes the floor to green if the guess matches the face
+                } else {
+                    floor.material.color.set(0xFF0066); // changes the floor to red if the guess does not match
+                }
+            }            
+		</script>
+	</body>
+</html>
